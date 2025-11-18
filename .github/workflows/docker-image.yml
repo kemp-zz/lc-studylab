@@ -1,13 +1,12 @@
+# .github/workflows/docker.yml
 name: Docker Image CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main" ]            # 只在 main 分支 push 时触发
   pull_request:
-    branches: [ "main" ]
-name: Docker Build
-
-on: [push, workflow_dispatch]
+    branches: [ "main" ]            # PR 到 main 也会构建
+  workflow_dispatch: {}              # 手动触发
 
 env:
   REGISTRY: docker.io
@@ -17,62 +16,62 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: read                # 读取仓库代码
+      packages: write               # 推送镜像到 Docker Hub
 
     steps:
-    - name: Checkout
-      uses: actions/checkout@v4
+      # -------------------------------------------------
+      # 1️⃣ Checkout 代码
+      # -------------------------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
+      # -------------------------------------------------
+      # 2️⃣ QEMU（多架构模拟）——只在需要 arm64 时打开
+      # -------------------------------------------------
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        # 如果你想同时构建 amd64+arm64，改成 all
+        # with:
+        #   platforms: all
+        #   platforms: linux/amd64,linux/arm64   # <-- 这里也可以自行写
 
+      # -------------------------------------------------
+      # 3️⃣ Buildx（多平台构建器）
+      # -------------------------------------------------
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
 
-    - name: 磁盘使用情况
-      run: df -h /
+      # -------------------------------------------------
+      # 4️⃣ Docker Hub 登录
+      # -------------------------------------------------
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-    - name: Setup Docker
-      run: |
-        sudo systemctl start docker
-        sudo systemctl enable docker
+      # -------------------------------------------------
+      # 5️⃣ Build & (optionally) Push
+      # -------------------------------------------------
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: Dockerfile
+          # 若想一次构建两种平台，打开下面这行并注释掉单平台行
+          # platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64                     # 单平台（默认）  
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:latest
+            ${{ env.IMAGE_NAME }}:${{ github.sha }}
 
-    - name: Clean Docker Resources
-      run: |
-        docker system prune -a --volumes --force
-        docker system df -v
-
-    # 新增：安装 QEMU 支持多架构模拟
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
-      with:
-       platforms: linux/amd64
-        #platforms: all
-
-    # 新增：设置 Docker Buildx 构建器
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Login to Docker Hub
-      uses: docker/login-action@v3
-      with:
-        registry: ${{ env.REGISTRY }}
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-    - name: Build and Push
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        platforms: linux/amd64
-        #platforms: linux/amd64,linux/arm64 
-        push: ${{ github.event_name != 'pull_request' }}
-        tags: |
-          ${{ env.IMAGE_NAME }}:latest
-          ${{ env.IMAGE_NAME }}:${{ github.sha }}
-jobs:
-
-  build:
-
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v4
-    - name: Build the Docker image
-      run: docker build . --file Dockerfile --tag my-image-name:$(date +%s)
+      # -------------------------------------------------
+      # 6️⃣（可选）显示构建产物信息，帮助调试
+      # -------------------------------------------------
+      - name: Show image digest
+        if: ${{ github.event_name != 'pull_request' }}
+        run: |
+          echo "Image pushed: ${{ env.IMAGE_NAME }}:${{ github.sha }}"
