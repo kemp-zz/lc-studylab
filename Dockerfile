@@ -2,27 +2,18 @@
 FROM node:20-alpine AS frontend-base
 WORKDIR /app/frontend
 
-# ------- 只拷贝依赖文件（缓存层） -------
+# 只拷贝依赖文件（用于缓存层）
 COPY frontend/package*.json ./
 
-# ======== ① 尝试使用 npm ci（必须有完整 lock） ========
-FROM frontend-base AS frontend-ci
-# 若 lock 文件缺失或损坏，下面一步会直接失败 → 进入 fallback
-RUN npm ci --silent --no-audit --prefer-offline || \
-    (echo "⚠️ npm ci 失败，切换到 npm install" && exit 1)
+# ① 先尝试 npm ci；若失败则 fallback 到 npm install
+RUN npm ci --silent --no-audit --prefer-offline \
+    || (echo "⚠️ npm ci 失败 → 使用 npm install" && npm install --silent --no-audit)
 
-# ======== ② fallback：npm install（没有 lock 时使用） ========
-FROM frontend-base AS frontend-install
-RUN npm install --silent --no-audit
-
-# ======== 统一后继续构建 ========
-# 这里用 `${BUILD_STAGE}` 参数决定走哪条路径（在 CI 中传递）  
-ARG BUILD_STAGE=ci
-FROM frontend-${BUILD_STAGE} AS frontend-build
+# 复制完整源码并构建
 COPY frontend ./
 RUN npm run build --silent
 
-# 把产物统一拷贝到 /out 目录，后面的运行时阶段直接引用
+# 把产物统一放到 /out，后面的运行时阶段只会取这里的内容
 RUN mkdir -p /out && cp -r .next /out/
 
 
@@ -60,8 +51,8 @@ COPY --from=backend-builder /root/.local /root/.local
 COPY --from=backend-builder /app/backend /app/backend
 COPY backend .
 
-# 复制前端产物（默认走 ci；若 CI 中传 BUILD_STAGE=install 则走 fallback）
-COPY --from=frontend-build /out/.next /app/frontend/.next
+# 复制前端产物（前端构建阶段已经把 .next 放到 /out）
+COPY --from=frontend-base /out/.next /app/frontend/.next
 
 EXPOSE ${PORT}
 HEALTHCHECK --interval=30s --timeout=5s \
